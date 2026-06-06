@@ -265,10 +265,7 @@ async def extract_text_with_gemini(image_bytes: bytes) -> str:
         
         # Convert bytes to PIL Image
         image = Image.open(io.BytesIO(image_bytes))
-        
-        # Initialize Gemini model
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
-        
+
         # Create prompt for prescription text extraction
         prompt = """
         You are an expert medical text extraction system. Please extract all text from this prescription image.
@@ -286,9 +283,12 @@ async def extract_text_with_gemini(image_bytes: bytes) -> str:
         Return only the extracted text without any additional commentary.
         """
         
-        # Generate content
-        response = model.generate_content([prompt, image])
-        
+        # Generate content using the google-genai Client (same SDK as /gemini)
+        response = googleclient.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[prompt, image],
+        )
+
         if response.text:
             return response.text.strip()
         else:
@@ -312,8 +312,10 @@ async def health_check():
 @app.get("/test-gemini")
 async def test_gemini():
     try:
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        response = model.generate_content("Say hello")
+        response = googleclient.models.generate_content(
+            model="gemini-2.0-flash",
+            contents="Say hello",
+        )
         return {"success": True, "response": response.text}
     except Exception as e:
         return {"success": False, "error": str(e)}
