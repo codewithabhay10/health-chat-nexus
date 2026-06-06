@@ -1,53 +1,53 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import { JitsiMeeting } from "@jitsi/react-sdk";
 
-declare global {
-  interface Window {
-    ZegoUIKitPrebuilt: any;
-  }
+// FastAPI speech-to-text endpoint used to build the live transcript.
+const TRANSCRIBE_ENDPOINT = "https://database-tval.onrender.com/record";
+
+// The route param can arrive as "123" or, from older links, "123&from=doctor".
+// Pull the real appointment id and the optional "from"/"roomID" hints out of it.
+function parseParam(raw: string | undefined) {
+  const [idPart, ...rest] = (raw ?? "").split("&");
+  const tail = new URLSearchParams(rest.join("&"));
+  const search = new URLSearchParams(window.location.search);
+  return {
+    id: idPart || "",
+    from: tail.get("from") || search.get("from") || "patient",
+    roomOverride: tail.get("roomID") || search.get("roomID") || "",
+  };
 }
 
-function getUrlParams(url: string): Record<string, string> {
-  const urlStr = url.split("?")[1];
-  const urlSearchParams = new URLSearchParams(urlStr);
-  return Object.fromEntries(urlSearchParams.entries());
-}
-
-const ZegoVideoConference: React.FC = () => {
-  // Force reload once on navigation to this page
-  useEffect(() => {
-    if (!sessionStorage.getItem("videoConferenceReloaded")) {
-      sessionStorage.setItem("videoConferenceReloaded", "true");
-      window.location.reload();
-    } else {
-      sessionStorage.removeItem("videoConferenceReloaded");
-    }
-  }, []);
-
-  const rootRef = useRef<HTMLDivElement>(null);
+const VideoConference: React.FC = () => {
   const navigate = useNavigate();
+  const { appointmentId } = useParams();
 
-  // Live transcript state
+  const { id, from, roomOverride } = parseParam(appointmentId);
+  // A deterministic room name so the doctor and patient land in the SAME call.
+  const roomName =
+    roomOverride || `HealthChat-${id || Math.floor(Math.random() * 100000)}`;
+  const displayName = from === "doctor" ? "Doctor" : "Patient";
+  const returnPath = from === "doctor" ? "/doctor-dashboard" : "/patient-dashboard";
+
+  // ─── Live transcript: record the mic in 3s chunks and POST to the STT endpoint ───
   const [transcript, setTranscript] = useState("");
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunks = useRef<Blob[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
 
-  // Start recording and send audio chunks every few seconds
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
+    let activeStream: MediaStream | null = null;
 
     async function startRecording() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        activeStream = stream;
         const mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
         mediaRecorderRef.current = mediaRecorder;
         audioChunks.current = [];
 
         mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunks.current.push(event.data);
-          }
+          if (event.data.size > 0) audioChunks.current.push(event.data);
         };
 
         mediaRecorder.onstop = async () => {
@@ -55,30 +55,25 @@ const ZegoVideoConference: React.FC = () => {
           const audioBlob = new Blob(audioChunks.current, { type: "audio/webm" });
           const formData = new FormData();
           formData.append("audio", audioBlob, "recording.webm");
-
           try {
-            const response = await fetch("https://database-tval.onrender.com/record", {
+            const response = await fetch(TRANSCRIBE_ENDPOINT, {
               method: "POST",
-              headers: { "Accept": "application/json" },
+              headers: { Accept: "application/json" },
               body: formData,
             });
             if (response.ok) {
               const data = await response.json();
-              if (data.transcription == "Transcription failed:") {
-                setTranscript((prev) => prev);
-              } else {
-                setTranscript((prev) => prev + " " + data.transcription);
+              if (data.transcription && data.transcription !== "Transcription failed:") {
+                setTranscript((prev) => (prev + " " + data.transcription).trim());
               }
             }
-          } catch (err) {
-            // Optionally handle error
+          } catch {
+            /* transcription is best-effort; ignore network failures */
           }
         };
 
         mediaRecorder.start();
-        setIsRecording(true);
-
-        // Send audio every 5 seconds
+        // Flush a chunk every 3 seconds for a near-live transcript.
         interval = setInterval(() => {
           if (mediaRecorder.state === "recording") {
             mediaRecorder.stop();
@@ -86,90 +81,49 @@ const ZegoVideoConference: React.FC = () => {
             audioChunks.current = [];
           }
         }, 3000);
-      } catch (err) {
-        // Optionally handle error
+      } catch {
+        /* mic unavailable: silently skip the live transcript */
       }
     }
 
-    // Start recording when component mounts
     startRecording();
 
     return () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         mediaRecorderRef.current.stop();
       }
-      setIsRecording(false);
+      activeStream?.getTracks().forEach((track) => track.stop());
       clearInterval(interval);
     };
   }, []);
 
-  useEffect(() => {
-    const roomID =
-      getUrlParams(window.location.href)["roomID"] ||
-      Math.floor(Math.random() * 10000).toString();
-
-    // Construct the final meeting link
-    const meetingLink =
-      window.location.protocol +
-      "//" +
-      window.location.host +
-      window.location.pathname +
-      "?roomID=" +
-      roomID;
-
-    // Save the meeting id and final link in localStorage
-    localStorage.setItem("meeting_id", roomID);
-    localStorage.setItem("meeting_link", meetingLink);
-
-    const userID = Math.floor(Math.random() * 10000).toString();
-    const userName = "userName" + userID;
-    const appID = 158654939;
-    const serverSecret = "23f26c9aa0de1a0defdc90161441bbf9";
-    const kitToken = window.ZegoUIKitPrebuilt.generateKitTokenForTest(
-      appID,
-      serverSecret,
-      roomID,
-      userID,
-      userName
-    );
-
-    const zp = window.ZegoUIKitPrebuilt.create(kitToken);
-    zp.joinRoom({
-      container: rootRef.current,
-      onLeaveRoom: () => {
-        navigate("/patient-dashboard");
-      },
-      sharedLinks: [
-        {
-          name: "Personal link",
-          url: meetingLink,
-        },
-      ],
-      scenario: {
-        mode: window.ZegoUIKitPrebuilt.VideoConference,
-      },
-      turnOnMicrophoneWhenJoining: true,
-      turnOnCameraWhenJoining: true,
-      showMyCameraToggleButton: true,
-      showMyMicrophoneToggleButton: true,
-      showAudioVideoSettingsButton: true,
-      showScreenSharingButton: true,
-      showTextChat: true,
-      showUserList: true,
-      maxUsers: 2,
-      layout: "Auto",
-      showLayoutButton: false,
-    });
-  }, [navigate]);
-
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
-      <div
-        id="root"
-        ref={rootRef}
-        style={{ width: "100vw", height: "100vh" }}
-      ></div>
-      {/* Transcript Box */}
+      <JitsiMeeting
+        domain="meet.jit.si"
+        roomName={roomName}
+        userInfo={{ displayName, email: "" }}
+        configOverwrite={{
+          prejoinPageEnabled: false,
+          startWithAudioMuted: false,
+          startWithVideoMuted: false,
+          disableModeratorIndicator: true,
+          disableThirdPartyRequests: true,
+        }}
+        interfaceConfigOverwrite={{
+          SHOW_JITSI_WATERMARK: false,
+          SHOW_WATERMARK_FOR_GUESTS: false,
+          DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
+          MOBILE_APP_PROMO: false,
+        }}
+        onReadyToClose={() => navigate(returnPath)}
+        getIFrameRef={(iframeRef) => {
+          iframeRef.style.height = "100vh";
+          iframeRef.style.width = "100vw";
+        }}
+      />
+
+      {/* Live transcript overlay (best-effort; powered by the FastAPI /record endpoint) */}
       <div
         style={{
           position: "absolute",
@@ -183,6 +137,7 @@ const ZegoVideoConference: React.FC = () => {
           boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
           zIndex: 1000,
           fontSize: 16,
+          pointerEvents: "none",
         }}
       >
         <strong>Live Transcript:</strong>
@@ -192,4 +147,4 @@ const ZegoVideoConference: React.FC = () => {
   );
 };
 
-export default ZegoVideoConference;
+export default VideoConference;

@@ -64,13 +64,13 @@ const App = () => (
                                 </ProtectedRoute>
                             } 
                         />
-                        <Route 
-                            path="/video-conference/:appointmentId" 
+                        <Route
+                            path="/video-conference/:appointmentId"
                             element={
-                                <ProtectedRoute requiredRole="patient">
+                                <ProtectedRoute>
                                     <VideoConference />
                                 </ProtectedRoute>
-                            } 
+                            }
                         />
                         
                         <Route path="*" element={<NotFound />} />
