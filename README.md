@@ -1,4 +1,4 @@
-# HealthChat — AI-Powered Multilingual Telemedicine Platform
+# HealthChat - AI-Powered Multilingual Telemedicine Platform
 
 > **Google Solution Challenge / Hack2Skill submission**
 > **Team:** `404_Error_notfound` · **Team Leader:** Abhay Madan
