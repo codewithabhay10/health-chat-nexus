@@ -1,0 +1,118 @@
+{
+    "all data": [
+        {
+        "blood": [
+            {
+                "id": "1",
+                "name": "Complete Blood Count (CBC)",
+                "description": "A comprehensive blood test that evaluates overall health and detects a variety of disorders, such as anemia, infection, and leukemia.",
+                "time": "24 hours",
+                "cost": "₹500"
+            },
+            {
+                "id": "2",
+                "name": "Lipid Profile",
+                "description": "A blood test that measures the levels of lipids, including cholesterol and triglycerides, to assess cardiovascular health.",
+                "time": "12 hours",
+                "cost": "₹800"
+            },
+            {
+                "id": "3",
+                "name": "Liver Function Test (LFT)",
+                "description": "A group of blood tests that provide information about the state of a patient's liver.",
+                "time": "24 hours",
+                "cost": "₹600"
+            },
+            {
+                "id": "4",
+                "name": "Thyroid Function Test (TFT)",
+                "description": "A blood test that measures the levels of thyroid hormones to assess thyroid function.",
+                "time": "24 hours",
+                "cost": "₹700"
+            }
+        ],
+        "urine": [
+            {
+                "id": "5",
+                "name": "Urinalysis",
+                "description": "A test that examines the content of urine to detect disorders such as diabetes, kidney disease, and urinary tract infections.",
+                "time": "6 hours",
+                "cost": "₹200"
+            },
+            {
+                "id": "6",
+                "name": "24-Hour Urine Collection",
+                "description": "A test that measures the total amount of urine produced in 24 hours to assess kidney function.",
+                "time": "24 hours",
+                "cost": "₹300"
+            },
+            {
+                "id": "7",
+                "name": "Urine Culture",
+                "description": "A test that detects bacteria or yeast in the urine to diagnose urinary tract infections.",
+                "time": "48 hours",
+                "cost": "₹400"
+            }
+        ],
+        "stool": [
+            {
+                "id": "8",
+                "name": "Stool Analysis",
+                "description": "A test that examines the stool for signs of digestive disorders, infections, and other gastrointestinal issues.",
+                "time": "24 hours",
+                "cost": "₹250"
+            },
+            {
+                "id": "9",
+                "name": "Stool Culture",
+                "description": "A test that detects bacteria or parasites in the stool to diagnose infections.",
+                "time": "48 hours",
+                "cost": "₹350"
+            },
+            {
+                "id": "10",
+                "name": "Fecal Occult Blood Test",
+                "description": "A test that checks for hidden blood in the stool, which can indicate gastrointestinal bleeding.",
+                "time": "24 hours",
+                "cost": "₹300"
+            },
+            {
+                "id": "11",
+                "name": "Stool Fat Test",
+                "description": "A test that measures the amount of fat in the stool to diagnose malabsorption disorders.",
+                "time": "48 hours",
+                "cost": "₹400"
+            }
+        ],
+        "imaging": [
+            {
+                "id": "12",
+                "name": "X-Ray",
+                "description": "A quick and painless imaging test that uses radiation to create images of the inside of the body.",
+                "time": "1 hour",
+                "cost": "₹300"
+            },
+            {
+                "id": "13",
+                "name": "Ultrasound",
+                "description": "An imaging test that uses sound waves to create images of organs and structures inside the body.",
+                "time": "2 hours",
+                "cost": "₹800"
+            },
+            {
+                "id": "14",
+                "name": "CT Scan",
+                "description": "A detailed imaging test that uses X-rays and computer technology to create cross-sectional images of the body.",
+                "time": "4 hours",
+                "cost": "₹2500"
+            },
+            {
+                "id": "15",
+                "name": "MRI Scan",
+                "description": "An advanced imaging test that uses magnetic fields and radio waves to create detailed images of organs and tissues.",
+                "time": "6 hours",
+                "cost": "₹5000"
+            }
+        ]
+        }]
+        }
