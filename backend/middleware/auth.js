@@ -13,9 +13,6 @@ const requireAuth = (req, res, next) => {
 
 // Check if user is a doctor
 const requireDoctor = (req, res, next) => {
-    // Debug to see what's in the session
-    console.log("DOCTOR SESSION DATA:", req.session);
-    
     if (!req.session || !req.session.user) {
         return res.status(401).json({ 
             error: 'Authentication required', 
@@ -46,9 +43,6 @@ const requireDoctor = (req, res, next) => {
 
 // Check if user is a patient
 const requirePatient = (req, res, next) => {
-    // DEBUG - Add this line
-    console.log("SESSION DATA:", req.session);
-    
     if (!req.session || !req.session.user) {
         return res.status(401).json({ 
             error: 'Authentication required', 

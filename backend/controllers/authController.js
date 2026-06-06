@@ -130,7 +130,6 @@ const loginDoctor = async (req, res) => {
                     message: 'Failed to create session'
                 });
             }
-            console.log("DOCTOR SESSION SAVED:", req.session);
             res.json({
                 success: true,
                 message: 'Login successful',
@@ -174,8 +173,8 @@ const registerPatient = async (req, res) => {
             bloodGroup,
             allergies,
             emergencyContact,
-            medicalHistory: medicalHistory, // Add this line
-            currentMedications: currentMedications, // Add this line
+            medicalHistory,
+            currentMedications,
         } = req.body;
 
         // Check if patient already exists
@@ -198,8 +197,8 @@ const registerPatient = async (req, res) => {
             bloodGroup: bloodGroup || '',
             allergies: allergies || [],
             emergencyContact: emergencyContact || {},
-            medicalHistory: medicalHistory || [], // Add this line
-            currentMedications: currentMedications || [] // Add this line
+            medicalHistory: medicalHistory || [],
+            currentMedications: currentMedications || []
         });
 
         await patient.save();
@@ -281,7 +280,6 @@ const loginPatient = async (req, res) => {
                     message: 'Failed to create session'
                 });
             }
-            console.log("SESSION SAVED SUCCESSFULLY:", req.session);
             res.json({
                 success: true,
                 message: 'Login successful',

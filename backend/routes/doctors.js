@@ -3,7 +3,6 @@ const { body, query } = require('express-validator');
 const {
     getDoctorProfile,
     updateDoctorProfile,
-    getAllDoctors,
     getDoctorAppointments,
     getDoctorDashboard,
     getAvailableSlots
@@ -74,13 +73,10 @@ router.get('/:id', (req, res) => {
 });
 
 
-// Add these routes before any authenticated routes
+// Public list of doctors (accessible by patients and doctors)
 router.get('/', (req, res) => {
     appointmentController.getAllDoctors(req, res);
 });
-
-// Public routes (accessible by patients and doctors)
-router.get('/', requireAuth, queryValidation, getAllDoctors);
 
 // Health check for doctor routes
 router.get('/health', (req, res) => {
