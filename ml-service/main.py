@@ -1,0 +1,466 @@
+from fastapi import FastAPI, Request, UploadFile, File,Body,HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from mongoDb import voice_collection, save_booking,save_voice,save_test, test_collection, booking_collection, chat_history_collection,chat_history
+from pymongo import MongoClient
+from fastapi.responses import JSONResponse
+import gridfs
+import os
+from dotenv import load_dotenv
+from fastapi.responses import StreamingResponse
+from bson import ObjectId
+import speech_recognition as sr
+import cv2
+from PIL import Image
+from pydub import AudioSegment
+import tempfile
+from google import genai
+from pydantic import BaseModel
+from gtts import gTTS
+import io
+from googletrans import Translator
+import pickle
+import nltk
+import numpy as np
+import tensorflow as tf
+from nltk.stem import WordNetLemmatizer
+
+app = FastAPI()
+load_dotenv()
+nltk.download('punkt_tab')
+nltk.download('punkt')
+nltk.download('wordnet')
+nltk.download('stopwords')
+
+googleclient = genai.Client(api_key = os.getenv("VITE_GOOGLE_GENAI_API_KEY"))
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://health-chat-nexus.vercel.app",'http://localhost:8080'],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+uri = os.getenv("VITE_MONGO_URI")
+
+client = MongoClient(uri)
+db = client["health_chat"]
+fs = gridfs.GridFS(db)
+
+@app.post("/record")
+async def record_voice(audio: UploadFile = File(...)):
+    contents = await audio.read()
+    file_id = fs.put(contents, filename=audio.filename, content_type=audio.content_type)
+
+    # Save to a temp file for transcription
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
+        temp_audio.write(contents)
+        temp_audio_path = temp_audio.name
+
+    # Convert webm to wav for SpeechRecognition
+    wav_path = temp_audio_path.replace(".webm", ".wav")
+    try:
+        sound = AudioSegment.from_file(temp_audio_path, format="webm")
+        sound.export(wav_path, format="wav")
+
+        # Transcribe using SpeechRecognition
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            try:
+                text = recognizer.recognize_google(audio_data)
+            except Exception as e:
+                text = f"{str(e)}"
+    except Exception as e:
+        text = f"{str(e)}"
+    finally:
+        # Clean up temp files
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+
+    # Save voice info and transcription using your custom function
+    save_voice({
+        "file_id": str(file_id),
+        "filename": audio.filename,
+        "content_type": audio.content_type,
+        "transcription": text
+    })
+
+    return {"file_id": str(file_id), "transcription": text}
+
+@app.get("/audio/{file_id}")
+async def get_audio(file_id: str):
+    file = fs.get(ObjectId(file_id))
+    return StreamingResponse(file, media_type=file.content_type)
+
+class PromptRequest(BaseModel):
+    prompt: str
+
+@app.post("/gemini")
+async def generate_response(request: PromptRequest):
+    response = googleclient.models.generate_content(
+        model="gemini-2.0-flash",
+        contents="you are a professional medical assistant, conversing with a patient. initially the patient tells you their symptoms you have to follow up with question regarding duration and severity of the symptoms. ask a few follow up question to have a basic idea of the disease and dont ask for past history or any personal information. behave professionally and at the end generate a small report covering the symptoms duration severity and possible disease the patient is suffering from ask the questions one by one not collectivly and you have access to previous things the patient has said and according the the front line assess what the duration of the symptoms and other things are and dont repeat a question twice" + request.prompt,
+    )
+    return {"text": response.text}
+
+@app.post("/tts")
+async def text_to_speech(text: str = Body(...), language: str = Body("en")):
+    # Generate MP3 using gTTS
+    tts = gTTS(text,lang=language)
+    mp3_fp = io.BytesIO()
+    tts.write_to_fp(mp3_fp)
+    mp3_fp.seek(0)
+    # Store in MongoDB
+    result = voice_collection.insert_one({
+        "audio": mp3_fp.getvalue(),
+        "content_type": "audio/mpeg"
+    })
+    return {"file_id": str(result.inserted_id)}
+
+@app.get("/tts/{file_id}")
+async def get_tts_audio(file_id: str):
+    doc = voice_collection.find_one({"_id": ObjectId(file_id)})
+    if not doc:
+        return {"error": "File not found"}
+    return StreamingResponse(io.BytesIO(doc["audio"]), media_type=doc["content_type"])
+
+class Text(BaseModel):
+    text: str
+    class Config:
+        from_attributes = True
+
+translator = Translator()
+
+@app.post("/english/")
+async def english(text: Text):
+    translation =  translator.translate(text.text, dest='en')
+    return JSONResponse(content={"Translation": translation.text})
+
+@app.post("/hindi/")
+async def hindi(text: Text):
+    translation =  translator.translate(text.text, src="en", dest='hi')
+    return JSONResponse(content={"Translation": translation.text})
+
+@app.post("/punjabi/")
+async def punjabi(text: Text):
+    translation =  translator.translate(text.text, dest='pa')
+    return JSONResponse(content={"Translation": translation.text})
+
+@app.post("/gujarati/")
+async def gujarati(text: Text):
+    translation =  translator.translate(text.text, dest='gu')
+    return JSONResponse(content={"Translation": translation.text})
+
+@app.post("/bengali/")
+async def bengali(text: Text):
+    translation =  translator.translate(text.text, dest='bn')
+    return JSONResponse(content={"Translation": translation.text})
+
+@app.post("/tamil/")
+async def tamil(text: Text):
+    translation =  translator.translate(text.text, dest='ta')
+    return JSONResponse(content={"Translation": translation.text})
+
+@app.post("/telugu/")
+async def telugu(text: Text):
+    translation =  translator.translate(text.text, dest='te')
+    return JSONResponse(content={"Translation": translation.text})
+
+class IntentClassifier:
+    def __init__(self, model_path='chatbot_model.h5', words_path='words.pkl', classes_path='classes.pkl'):
+
+        # Load trained model and preprocessed data
+        self.model = tf.keras.models.load_model(model_path)
+        self.words = pickle.load(open(words_path, 'rb'))
+        self.classes = pickle.load(open(classes_path, 'rb'))
+        
+        # Initialize lemmatizer
+        self.lemmatizer = WordNetLemmatizer()
+        self.ignore_letters = ['?', '!', '.', ',', ';', ':']
+        
+        # Confidence threshold
+        self.confidence_threshold = 0.5
+    
+    def clean_sentence(self, sentence):
+        sentence_words = nltk.word_tokenize(sentence.lower())
+        sentence_words = [
+            self.lemmatizer.lemmatize(word) 
+            for word in sentence_words 
+            if word not in self.ignore_letters
+        ]
+        return sentence_words
+    
+    def create_bag_of_words(self, sentence):
+        sentence_words = self.clean_sentence(sentence)
+        bag = [0] * len(self.words)
+        
+        for w in sentence_words:
+            for i, word in enumerate(self.words):
+                if word == w:
+                    bag[i] = 1
+        
+        return np.array(bag)
+    
+    def get_intent(self, sentence):
+        # Create bag of words
+        bow = self.create_bag_of_words(sentence)
+        
+        # Get prediction
+        prediction = self.model.predict(np.array([bow]), verbose=0)[0]
+        
+        # Get the class with highest probability
+        max_index = np.argmax(prediction)
+        predicted_intent = self.classes[max_index]
+        confidence = prediction[max_index]
+        
+        # If confidence is low, default to diagnosis
+        if confidence < self.confidence_threshold:
+            return "diagnosis"
+        
+        return predicted_intent
+
+# Initialize the classifier (do this once)
+classifier = IntentClassifier()
+
+def classify_intent(sentence):
+    return classifier.get_intent(sentence)
+
+@app.post("/detect_intent/")
+async def detect_intent(text: Text):
+    intent = classify_intent(text.text)
+    return JSONResponse(content={"intent": intent})
+
+def preprocess_image(image_bytes: bytes) -> bytes:
+    try:
+        # Convert bytes to numpy array
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            raise ValueError("Invalid image format")
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Apply adaptive thresholding
+        thresh = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
+        )
+        
+        # Encode back to bytes
+        _, buffer = cv2.imencode('.png', thresh)
+        return buffer.tobytes()
+    
+    except Exception as e:
+        return image_bytes  # Return original if preprocessing fails
+
+async def extract_text_with_gemini(image_bytes: bytes) -> str:
+    try:
+        
+        # Convert bytes to PIL Image
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Initialize Gemini model
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        
+        # Create prompt for prescription text extraction
+        prompt = """
+        You are an expert medical text extraction system. Please extract all text from this prescription image.
+        
+        Focus on:
+        - Patient information
+        - Doctor information
+        - Medication names and dosages
+        - Instructions for use
+        - Date and other relevant details
+        
+        Please format the extracted text clearly and maintain the structure as much as possible.
+        If you cannot read certain parts, indicate with [UNCLEAR] or [ILLEGIBLE].
+        
+        Return only the extracted text without any additional commentary.
+        """
+        
+        # Generate content
+        response = model.generate_content([prompt, image])
+        
+        if response.text:
+            return response.text.strip()
+        else:
+            return "No text could be extracted from the image."
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
+
+@app.get("/")
+async def root():
+    return {"message": "OCR Prescription Service is running", "status": "healthy"}
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "gemini_configured": bool(os.getenv("VITE_GOOGLE_GENAI_API_KEY")),
+        "service": "OCR Prescription Service"
+    }
+    
+@app.get("/test-gemini")
+async def test_gemini():
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = model.generate_content("Say hello")
+        return {"success": True, "response": response.text}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/extract-text")
+async def extract_prescription_text(file: UploadFile = File(...)):
+
+    # Validate file type
+    if not file.content_type.startswith('image/'):
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    # Check file size (max 10MB)
+    if file.size and file.size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size too large (max 10MB)")
+    
+    try:
+        # Read image bytes
+        image_bytes = await file.read()
+        
+        # Preprocess image
+        processed_image_bytes = preprocess_image(image_bytes)
+        
+        # Extract text using Gemini
+        extracted_text = await extract_text_with_gemini(processed_image_bytes)
+        
+        return JSONResponse(content={
+            "success": True,
+            "extracted_text": extracted_text,
+            "filename": file.filename,
+            "file_size": len(image_bytes),
+            "message": "Text extracted successfully"
+        })
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+    
+
+class TestData(BaseModel):
+    name: str
+    description: str
+    time: str  
+    cost: str
+    category: str
+
+class BookingData(BaseModel):
+    test_id: str
+    user_id: str
+    date: str  
+    address: str
+    time: str
+    status: str = "booked"  # Default status is booked
+
+class MeetingData(BaseModel):
+    room_id: str
+    user_id: str
+    doctor_id: str
+
+@app.post("/test")
+async def test_endpoint(test_data: TestData):
+    """
+    Endpoint to save test data to MongoDB.
+    """
+    try:
+        inserted_id = save_test(test_data.dict())
+        return {"status": "success", "inserted_id": str(inserted_id)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+@app.get("/test")
+async def get_test():
+    """
+    Endpoint to retrieve all test data from MongoDB.
+    """
+    try:
+        tests = list(test_collection.find())
+        for test in tests:
+            test["_id"] = str(test["_id"])  # Convert ObjectId to string
+        return {"status": "success", "data": tests}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+@app.post("/test/book")
+async def book_test(booking_data: BookingData):
+    """
+    Endpoint to book a test.
+    """
+    try:
+        inserted_id = save_booking(booking_data.dict())
+        return {"status": "success", "inserted_id": str(inserted_id)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+@app.get("/test/booked")
+async def get_booked_tests():
+    """
+    Endpoint to retrieve all booked tests.
+    """
+    try:
+        booked_tests = list(booking_collection.find())
+        for booking in booked_tests:
+            booking["_id"] = str(booking["_id"])  # Convert ObjectId to string
+        return {"status": "success", "data": booked_tests}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+from fastapi import HTTPException
+
+@app.delete("/test/book/{booking_id}")
+async def delete_booking(booking_id: str):
+    """
+    Endpoint to delete a booked test by its ID.
+    """
+    try:
+        result = booking_collection.delete_one({"_id": ObjectId(booking_id)})
+        if result.deleted_count == 0:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        return {"status": "success", "deleted_id": booking_id}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+class ChatHistory(BaseModel):
+    user_id: str
+    by: str
+    messages: list
+
+@app.post("/chat_history")
+async def save_chat_history(chat_data: dict):
+    """
+    Endpoint to save chat history.
+    """
+    try:
+        chat_history(chat_data)
+        return {"status": "success", "message": "Chat history saved successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    
+@app.get("/chat_history/{user_id}")
+async def get_chat_history(user_id: str):
+    """
+    Endpoint to retrieve chat history for a specific user.
+    """
+    try:
+        history = list(chat_history_collection.find({"user_id": user_id}))
+        for chat in history:
+            chat["_id"] = str(chat["_id"])  # Convert ObjectId to string
+        return {"status": "success", "data": history}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
