@@ -7,40 +7,24 @@ class ApiService {
 
     async request(url, options = {}) {
         try {
-          // Get the full URL
-          const fullUrl = `${this.baseURL}${url}`;
-          console.log("Making request to:", fullUrl);
-          
-          // Include credentials to send cookies
-          const response = await fetch(fullUrl, {
-            ...options,
-            headers: {
-              'Content-Type': 'application/json',
-              ...options.headers
-            },
-            credentials: 'include' // This is crucial - it sends cookies with request
-          });
-            console.log("Response status:", response.status);
-            // Log the response headers to debug
-            console.log("Response headers:", {
-                'set-cookie': response.headers.get('set-cookie'),
-                'content-type': response.headers.get('content-type')
+            // Always send cookies so the session is included with the request.
+            const response = await fetch(`${this.baseURL}${url}`, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...options.headers
+                },
+                credentials: 'include'
             });
-            // Check if the response is JSON
+
             const contentType = response.headers.get('content-type');
             const isJson = contentType && contentType.includes('application/json');
-            
-            // Parse response
             const data = isJson ? await response.json() : await response.text();
 
-            // Handle error responses
             if (!response.ok) {
-                const error = isJson && data.message 
+                throw (isJson && data.message)
                     ? new Error(data.message)
                     : new Error(`API request failed with status ${response.status}`);
-                
-                console.error('API Error Response:', data);
-                throw error;
             }
 
             return data;
@@ -52,15 +36,11 @@ class ApiService {
 
     // Auth endpoints
     async loginPatient(credentials) {
-        console.log("Attempting to login patient:", credentials.email);
-        const response = await this.request('/auth/patient/login', {
-          method: 'POST',
-          body: JSON.stringify(credentials),
-          credentials: 'include' // Include credentials to send cookies
+        return this.request('/auth/patient/login', {
+            method: 'POST',
+            body: JSON.stringify(credentials)
         });
-        console.log("Login response received:", response);
-        return response;
-      }
+    }
 
     // Use the correct endpoint for patient registration
     async registerPatient(userData) {
@@ -130,16 +110,8 @@ class ApiService {
         return this.request('/doctors/dashboard');
     }
 
-    // Fix the getDoctorProfile method
     async getDoctorProfile() {
-        // Get the doctor ID from localStorage
-        const doctorId = localStorage.getItem('userId');
-        
-        // Include it in the request
-        return this.request('/doctors/profile', {
-            method: 'GET',      
-            credentials: 'include' // Include credentials to send cookies  
-        });
+        return this.request('/doctors/profile', { method: 'GET' });
     }
 
     async updateDoctorProfile(data) {
@@ -148,15 +120,6 @@ class ApiService {
             body: JSON.stringify(data),
             credentials: 'include' // Include credentials to send cookies
         });
-    }
-
-    async getDoctorAppointments(params = {}) {
-        const queryString = new URLSearchParams(params).toString();
-        return this.request(`/doctors/appointments?${queryString}`);
-    }
-
-    async getAvailableSlots(date) {
-        return this.request(`/doctors/available-slots?date=${date}`);
     }
 
     // Appointment endpoints

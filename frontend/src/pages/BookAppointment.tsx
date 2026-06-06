@@ -40,7 +40,7 @@ const BookAppointment = () => {
 
     const loadAvailableSlots = async () => {
         try {
-            const response = await apiService.getAvailableSlots(formData.appointmentDate);
+            const response = await apiService.getAvailableSlots(doctorId, formData.appointmentDate);
             setAvailableSlots(response.availableSlots);
         } catch (error) {
             console.error('Failed to load available slots:', error);

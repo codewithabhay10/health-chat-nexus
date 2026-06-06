@@ -187,7 +187,7 @@ const handleStartConsultation = async (consultationId: string) => {
     });
     // Use roomId and pass from=doctor
     console.log(response.appointment.roomId);
-    navigate(`/video-conference/${consultationId}&from=doctor`);
+    navigate(`/video-conference/${consultationId}?from=doctor`);
   } else {
     toast({
       title: "Error",
