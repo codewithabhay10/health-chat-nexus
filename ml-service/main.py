@@ -2,16 +2,22 @@ from fastapi import FastAPI, Request, UploadFile, File,Body,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from mongoDb import voice_collection, save_booking,save_voice,save_test, test_collection, booking_collection, chat_history_collection,chat_history
+# pyrefly: ignore [missing-import]
 from pymongo import MongoClient
 from fastapi.responses import JSONResponse
+# pyrefly: ignore [missing-import]
 import gridfs
 import os
 from dotenv import load_dotenv
 from fastapi.responses import StreamingResponse
+# pyrefly: ignore [missing-import]
 from bson import ObjectId
+# pyrefly: ignore [missing-import]
 import speech_recognition as sr
+# pyrefly: ignore [missing-import]
 import cv2
 from PIL import Image
+# pyrefly: ignore [missing-import]
 from pydub import AudioSegment
 import tempfile
 from google import genai
