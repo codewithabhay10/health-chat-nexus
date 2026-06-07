@@ -671,11 +671,12 @@ const rescheduleAppointment = async (req, res) => {
             });
         }
         
-        // Update appointment
-        appointment.appointmentDate = appointmentDate;
-        appointment.timeSlot = timeSlot;
+        // Update appointment (only the fields actually provided, so a
+        // time-only reschedule doesn't wipe the existing date).
+        if (appointmentDate) appointment.appointmentDate = appointmentDate;
+        if (timeSlot) appointment.timeSlot = timeSlot;
         appointment.lastModified = Date.now();
-        
+
         await appointment.save();
         
         res.json({
@@ -704,21 +705,24 @@ const addPrescription = async (req, res) => {
             });
         }
         
-        // Use findByIdAndUpdate instead of findById+save to bypass validation
-        const result = await Appointment.findByIdAndUpdate(
-            appointmentId,
-            { 
+        // Scope the update to the doctor who owns this appointment, so a
+        // doctor can't write a prescription onto someone else's appointment.
+        // findOneAndUpdate (not findById+save) also skips the past-date
+        // validation that would otherwise reject a completed appointment.
+        const result = await Appointment.findOneAndUpdate(
+            { _id: appointmentId, doctorId: req.user.id },
+            {
                 prescription: {
                     medications,
                     instructions
                 }
             },
-            { 
+            {
                 new: true,          // Return the updated document
                 runValidators: false // Skip validation to allow past dates
             }
         );
-        
+
         if (!result) {
             return res.status(404).json({
                 success: false,

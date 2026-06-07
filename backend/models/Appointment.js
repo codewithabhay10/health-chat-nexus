@@ -16,6 +16,11 @@ const appointmentSchema = new mongoose.Schema({
         required: [true, 'Appointment date is required'],
         validate: {
             validator: function(date) {
+                // Only enforce the future-date rule when the date is being set
+                // or changed. Otherwise a later save() (e.g. marking an
+                // appointment completed, or rating it) would fail validation
+                // simply because the appointment is now in the past.
+                if (this.isModified && !this.isModified('appointmentDate')) return true;
                 return date > new Date();
             },
             message: 'Appointment date must be in the future'

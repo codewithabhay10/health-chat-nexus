@@ -13,7 +13,6 @@ const getPatientProfile = async (req, res) => {
                 message: 'Patient profile not found'
             });
         }
-        console.log('Patient profile retrieved:', patient);
         res.json({
             success: true,
             patient

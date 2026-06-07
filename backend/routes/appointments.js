@@ -1,5 +1,6 @@
 const express = require('express');
 const { body, param, query } = require('express-validator');
+const appointmentController = require('../controllers/appointmentController');
 const {
     bookAppointment,
     getAppointment,
@@ -7,7 +8,7 @@ const {
     cancelAppointment,
     rateAppointment,
     getAppointmentStats
-} = require('../controllers/appointmentController');
+} = appointmentController;
 const { requireAuth, requirePatient, requireDoctor } = require('../middleware/auth');
 
 const router = express.Router();
