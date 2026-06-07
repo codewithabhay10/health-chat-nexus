@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, UploadFile, File,Body,HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from mongoDb import voice_collection, save_booking,save_voice,save_test, test_collection, booking_collection, chat_history_collection,chat_history
 from pymongo import MongoClient
 from fastapi.responses import JSONResponse
@@ -26,10 +27,20 @@ from nltk.stem import WordNetLemmatizer
 
 app = FastAPI()
 load_dotenv()
-nltk.download('punkt_tab')
-nltk.download('punkt')
-nltk.download('wordnet')
-nltk.download('stopwords')
+
+# Download NLTK data once. Checking first avoids re-downloading on every cold
+# start, which noticeably slows boot time on hosts like Render.
+NLTK_RESOURCES = {
+    'punkt': 'tokenizers/punkt',
+    'punkt_tab': 'tokenizers/punkt_tab',
+    'wordnet': 'corpora/wordnet',
+    'stopwords': 'corpora/stopwords',
+}
+for _name, _path in NLTK_RESOURCES.items():
+    try:
+        nltk.data.find(_path)
+    except LookupError:
+        nltk.download(_name)
 
 googleclient = genai.Client(api_key = os.getenv("VITE_GOOGLE_GENAI_API_KEY"))
 
@@ -47,10 +58,13 @@ client = MongoClient(uri)
 db = client["health_chat"]
 fs = gridfs.GridFS(db)
 
-@app.post("/record")
-async def record_voice(audio: UploadFile = File(...)):
-    contents = await audio.read()
-    file_id = fs.put(contents, filename=audio.filename, content_type=audio.content_type)
+
+def _transcribe_and_store(contents: bytes, filename: str, content_type: str) -> dict:
+    """Blocking audio work (GridFS write, webm->wav, transcription).
+
+    Kept synchronous and run in a threadpool so it never blocks the event loop.
+    """
+    file_id = fs.put(contents, filename=filename, content_type=content_type)
 
     # Save to a temp file for transcription
     with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
@@ -83,15 +97,24 @@ async def record_voice(audio: UploadFile = File(...)):
     # Save voice info and transcription using your custom function
     save_voice({
         "file_id": str(file_id),
-        "filename": audio.filename,
-        "content_type": audio.content_type,
+        "filename": filename,
+        "content_type": content_type,
         "transcription": text
     })
 
     return {"file_id": str(file_id), "transcription": text}
 
+
+@app.post("/record")
+async def record_voice(audio: UploadFile = File(...)):
+    contents = await audio.read()
+    # Offload the blocking transcription pipeline to a worker thread.
+    return await run_in_threadpool(
+        _transcribe_and_store, contents, audio.filename, audio.content_type
+    )
+
 @app.get("/audio/{file_id}")
-async def get_audio(file_id: str):
+def get_audio(file_id: str):
     file = fs.get(ObjectId(file_id))
     return StreamingResponse(file, media_type=file.content_type)
 
@@ -99,7 +122,7 @@ class PromptRequest(BaseModel):
     prompt: str
 
 @app.post("/gemini")
-async def generate_response(request: PromptRequest):
+def generate_response(request: PromptRequest):
     response = googleclient.models.generate_content(
         model="gemini-2.0-flash",
         contents="you are a professional medical assistant, conversing with a patient. initially the patient tells you their symptoms you have to follow up with question regarding duration and severity of the symptoms. ask a few follow up question to have a basic idea of the disease and dont ask for past history or any personal information. behave professionally and at the end generate a small report covering the symptoms duration severity and possible disease the patient is suffering from ask the questions one by one not collectivly and you have access to previous things the patient has said and according the the front line assess what the duration of the symptoms and other things are and dont repeat a question twice" + request.prompt,
@@ -107,7 +130,7 @@ async def generate_response(request: PromptRequest):
     return {"text": response.text}
 
 @app.post("/tts")
-async def text_to_speech(text: str = Body(...), language: str = Body("en")):
+def text_to_speech(text: str = Body(...), language: str = Body("en")):
     # Generate MP3 using gTTS
     tts = gTTS(text,lang=language)
     mp3_fp = io.BytesIO()
@@ -121,7 +144,7 @@ async def text_to_speech(text: str = Body(...), language: str = Body("en")):
     return {"file_id": str(result.inserted_id)}
 
 @app.get("/tts/{file_id}")
-async def get_tts_audio(file_id: str):
+def get_tts_audio(file_id: str):
     doc = voice_collection.find_one({"_id": ObjectId(file_id)})
     if not doc:
         return {"error": "File not found"}
@@ -135,37 +158,37 @@ class Text(BaseModel):
 translator = Translator()
 
 @app.post("/english/")
-async def english(text: Text):
+def english(text: Text):
     translation =  translator.translate(text.text, dest='en')
     return JSONResponse(content={"Translation": translation.text})
 
 @app.post("/hindi/")
-async def hindi(text: Text):
+def hindi(text: Text):
     translation =  translator.translate(text.text, src="en", dest='hi')
     return JSONResponse(content={"Translation": translation.text})
 
 @app.post("/punjabi/")
-async def punjabi(text: Text):
+def punjabi(text: Text):
     translation =  translator.translate(text.text, dest='pa')
     return JSONResponse(content={"Translation": translation.text})
 
 @app.post("/gujarati/")
-async def gujarati(text: Text):
+def gujarati(text: Text):
     translation =  translator.translate(text.text, dest='gu')
     return JSONResponse(content={"Translation": translation.text})
 
 @app.post("/bengali/")
-async def bengali(text: Text):
+def bengali(text: Text):
     translation =  translator.translate(text.text, dest='bn')
     return JSONResponse(content={"Translation": translation.text})
 
 @app.post("/tamil/")
-async def tamil(text: Text):
+def tamil(text: Text):
     translation =  translator.translate(text.text, dest='ta')
     return JSONResponse(content={"Translation": translation.text})
 
 @app.post("/telugu/")
-async def telugu(text: Text):
+def telugu(text: Text):
     translation =  translator.translate(text.text, dest='te')
     return JSONResponse(content={"Translation": translation.text})
 
@@ -176,50 +199,45 @@ class IntentClassifier:
         self.model = tf.keras.models.load_model(model_path)
         self.words = pickle.load(open(words_path, 'rb'))
         self.classes = pickle.load(open(classes_path, 'rb'))
-        
+
         # Initialize lemmatizer
         self.lemmatizer = WordNetLemmatizer()
         self.ignore_letters = ['?', '!', '.', ',', ';', ':']
-        
+
         # Confidence threshold
         self.confidence_threshold = 0.5
-    
+
     def clean_sentence(self, sentence):
         sentence_words = nltk.word_tokenize(sentence.lower())
         sentence_words = [
-            self.lemmatizer.lemmatize(word) 
-            for word in sentence_words 
+            self.lemmatizer.lemmatize(word)
+            for word in sentence_words
             if word not in self.ignore_letters
         ]
         return sentence_words
-    
+
     def create_bag_of_words(self, sentence):
-        sentence_words = self.clean_sentence(sentence)
-        bag = [0] * len(self.words)
-        
-        for w in sentence_words:
-            for i, word in enumerate(self.words):
-                if word == w:
-                    bag[i] = 1
-        
-        return np.array(bag)
-    
+        sentence_words = set(self.clean_sentence(sentence))
+        # Single pass over the vocabulary using a set lookup instead of a
+        # nested word-by-word scan.
+        return np.array([1 if word in sentence_words else 0 for word in self.words])
+
     def get_intent(self, sentence):
         # Create bag of words
         bow = self.create_bag_of_words(sentence)
-        
+
         # Get prediction
         prediction = self.model.predict(np.array([bow]), verbose=0)[0]
-        
+
         # Get the class with highest probability
         max_index = np.argmax(prediction)
         predicted_intent = self.classes[max_index]
         confidence = prediction[max_index]
-        
+
         # If confidence is low, default to diagnosis
         if confidence < self.confidence_threshold:
             return "diagnosis"
-        
+
         return predicted_intent
 
 # Initialize the classifier (do this once)
@@ -229,7 +247,7 @@ def classify_intent(sentence):
     return classifier.get_intent(sentence)
 
 @app.post("/detect_intent/")
-async def detect_intent(text: Text):
+def detect_intent(text: Text):
     intent = classify_intent(text.text)
     return JSONResponse(content={"intent": intent})
 
@@ -238,53 +256,55 @@ def preprocess_image(image_bytes: bytes) -> bytes:
         # Convert bytes to numpy array
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
+
         if img is None:
             raise ValueError("Invalid image format")
-        
+
         # Convert to grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
+
         # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        
+
         # Apply adaptive thresholding
         thresh = cv2.adaptiveThreshold(
             blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
         )
-        
+
         # Encode back to bytes
         _, buffer = cv2.imencode('.png', thresh)
         return buffer.tobytes()
-    
+
     except Exception as e:
         return image_bytes  # Return original if preprocessing fails
 
 async def extract_text_with_gemini(image_bytes: bytes) -> str:
     try:
-        
+
         # Convert bytes to PIL Image
         image = Image.open(io.BytesIO(image_bytes))
 
         # Create prompt for prescription text extraction
         prompt = """
         You are an expert medical text extraction system. Please extract all text from this prescription image.
-        
+
         Focus on:
         - Patient information
         - Doctor information
         - Medication names and dosages
         - Instructions for use
         - Date and other relevant details
-        
+
         Please format the extracted text clearly and maintain the structure as much as possible.
         If you cannot read certain parts, indicate with [UNCLEAR] or [ILLEGIBLE].
-        
+
         Return only the extracted text without any additional commentary.
         """
-        
-        # Generate content using the google-genai Client (same SDK as /gemini)
-        response = googleclient.models.generate_content(
+
+        # Generate content using the google-genai Client (same SDK as /gemini).
+        # The SDK call is blocking, so run it in a threadpool.
+        response = await run_in_threadpool(
+            googleclient.models.generate_content,
             model="gemini-2.0-flash",
             contents=[prompt, image],
         )
@@ -293,7 +313,7 @@ async def extract_text_with_gemini(image_bytes: bytes) -> str:
             return response.text.strip()
         else:
             return "No text could be extracted from the image."
-            
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Text extraction failed: {str(e)}")
 
@@ -308,9 +328,9 @@ async def health_check():
         "gemini_configured": bool(os.getenv("VITE_GOOGLE_GENAI_API_KEY")),
         "service": "OCR Prescription Service"
     }
-    
+
 @app.get("/test-gemini")
-async def test_gemini():
+def test_gemini():
     try:
         response = googleclient.models.generate_content(
             model="gemini-2.0-flash",
@@ -326,21 +346,21 @@ async def extract_prescription_text(file: UploadFile = File(...)):
     # Validate file type
     if not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
-    
+
     # Check file size (max 10MB)
     if file.size and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File size too large (max 10MB)")
-    
+
     try:
         # Read image bytes
         image_bytes = await file.read()
-        
-        # Preprocess image
-        processed_image_bytes = preprocess_image(image_bytes)
-        
+
+        # Preprocess image (blocking OpenCV work -> threadpool)
+        processed_image_bytes = await run_in_threadpool(preprocess_image, image_bytes)
+
         # Extract text using Gemini
         extracted_text = await extract_text_with_gemini(processed_image_bytes)
-        
+
         return JSONResponse(content={
             "success": True,
             "extracted_text": extracted_text,
@@ -348,24 +368,24 @@ async def extract_prescription_text(file: UploadFile = File(...)):
             "file_size": len(image_bytes),
             "message": "Text extracted successfully"
         })
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
-    
+
 
 class TestData(BaseModel):
     name: str
     description: str
-    time: str  
+    time: str
     cost: str
     category: str
 
 class BookingData(BaseModel):
     test_id: str
     user_id: str
-    date: str  
+    date: str
     address: str
     time: str
     status: str = "booked"  # Default status is booked
@@ -376,7 +396,7 @@ class MeetingData(BaseModel):
     doctor_id: str
 
 @app.post("/test")
-async def test_endpoint(test_data: TestData):
+def test_endpoint(test_data: TestData):
     """
     Endpoint to save test data to MongoDB.
     """
@@ -385,9 +405,9 @@ async def test_endpoint(test_data: TestData):
         return {"status": "success", "inserted_id": str(inserted_id)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
+
 @app.get("/test")
-async def get_test():
+def get_test():
     """
     Endpoint to retrieve all test data from MongoDB.
     """
@@ -398,9 +418,9 @@ async def get_test():
         return {"status": "success", "data": tests}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
+
 @app.post("/test/book")
-async def book_test(booking_data: BookingData):
+def book_test(booking_data: BookingData):
     """
     Endpoint to book a test.
     """
@@ -409,9 +429,9 @@ async def book_test(booking_data: BookingData):
         return {"status": "success", "inserted_id": str(inserted_id)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
+
 @app.get("/test/booked")
-async def get_booked_tests():
+def get_booked_tests():
     """
     Endpoint to retrieve all booked tests.
     """
@@ -422,11 +442,11 @@ async def get_booked_tests():
         return {"status": "success", "data": booked_tests}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
+
 from fastapi import HTTPException
 
 @app.delete("/test/book/{booking_id}")
-async def delete_booking(booking_id: str):
+def delete_booking(booking_id: str):
     """
     Endpoint to delete a booked test by its ID.
     """
@@ -444,7 +464,7 @@ class ChatHistory(BaseModel):
     messages: list
 
 @app.post("/chat_history")
-async def save_chat_history(chat_data: dict):
+def save_chat_history(chat_data: dict):
     """
     Endpoint to save chat history.
     """
@@ -453,9 +473,9 @@ async def save_chat_history(chat_data: dict):
         return {"status": "success", "message": "Chat history saved successfully"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
+
 @app.get("/chat_history/{user_id}")
-async def get_chat_history(user_id: str):
+def get_chat_history(user_id: str):
     """
     Endpoint to retrieve chat history for a specific user.
     """
