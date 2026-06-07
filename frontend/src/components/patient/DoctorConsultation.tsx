@@ -279,33 +279,37 @@ const DoctorConsultation = () => {
   };
 
   async function cancelAppointment(appointmentId: string) {
-    const response = await fetch(`https://backendnode-j51t.onrender.com/meeting/${appointmentId}`, {
-      method: "DELETE",
-    });
-    const data = await response.json();
-    return data;
+    // Hits DELETE /appointments/:id with the session cookie included.
+    return ApiService.cancelAppointment(appointmentId);
   }
 
-  const confirmCancelAppointment = () => {
-    if (currentAppointment) {
-      // Update the appointment status to canceled
-      cancelAppointment(currentAppointment.id);
-      setAppointments(prev => 
-        prev.map(apt => 
-          apt.id === currentAppointment.id 
-            ? {...apt, status: 'canceled' as const} 
+  const confirmCancelAppointment = async () => {
+    if (!currentAppointment) return;
+    try {
+      // Only update the UI once the server confirms the cancellation.
+      await cancelAppointment(currentAppointment.id);
+      setAppointments(prev =>
+        prev.map(apt =>
+          apt.id === currentAppointment.id
+            ? {...apt, status: 'canceled' as const}
             : apt
         )
       );
-      
+
       // Reset the current view
       setCurrentAppointment(null);
       setBookingComplete(false);
       setShowCancelDialog(false);
-      
+
       toast({
         title: "Appointment Canceled",
         description: "Your appointment has been successfully canceled.",
+      });
+    } catch (error) {
+      toast({
+        title: "Cancellation Failed",
+        description: error instanceof Error ? error.message : "Failed to cancel appointment",
+        variant: "destructive"
       });
     }
   };
