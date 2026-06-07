@@ -27,8 +27,13 @@ const bookAppointment = async (req, res) => {
 
         const patientId = req.user.id;
 
+        // Doctor and patient lookups are independent - fetch them together.
+        const [doctor, patient] = await Promise.all([
+            Doctor.findById(doctorId),
+            Patient.findById(patientId)
+        ]);
+
         // Check if doctor exists
-        const doctor = await Doctor.findById(doctorId);
         if (!doctor) {
             return res.status(404).json({
                 error: 'Doctor not found',
@@ -37,7 +42,6 @@ const bookAppointment = async (req, res) => {
         }
 
         // Check if patient exists
-        const patient = await Patient.findById(patientId);
         if (!patient) {
             return res.status(404).json({
                 error: 'Patient not found',
@@ -164,7 +168,8 @@ const getAppointment = async (req, res) => {
 
         const appointment = await Appointment.findById(appointmentId)
             .populate('doctorId', 'name email phone specialization consultationFee')
-            .populate('patientId', 'name email phone age gender');
+            .populate('patientId', 'name email phone age gender')
+            .lean();
 
         if (!appointment) {
             return res.status(404).json({
@@ -350,19 +355,29 @@ const rateAppointment = async (req, res) => {
         appointment.rating = { score, feedback };
         await appointment.save();
 
-        // Update doctor's overall rating
-        const doctorAppointments = await Appointment.find({
-            doctorId: appointment.doctorId,
-            status: 'completed',
-            'rating.score': { $exists: true }
-        });
+        // Recompute the doctor's average rating in the database rather than
+        // loading every rated appointment into memory and reducing in Node.
+        const [agg] = await Appointment.aggregate([
+            {
+                $match: {
+                    doctorId: appointment.doctorId,
+                    status: 'completed',
+                    'rating.score': { $exists: true }
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    averageRating: { $avg: '$rating.score' }
+                }
+            }
+        ]);
 
-        const totalRatings = doctorAppointments.length;
-        const averageRating = doctorAppointments.reduce((sum, apt) => sum + apt.rating.score, 0) / totalRatings;
-
-        await Doctor.findByIdAndUpdate(appointment.doctorId, {
-            rating: Math.round(averageRating * 10) / 10 // Round to 1 decimal place
-        });
+        if (agg) {
+            await Doctor.findByIdAndUpdate(appointment.doctorId, {
+                rating: Math.round(agg.averageRating * 10) / 10 // Round to 1 decimal place
+            });
+        }
 
         res.json({
             success: true,
@@ -441,7 +456,8 @@ const getDoctorAppointments = async (req, res) => {
             .populate('patientId', 'name email phone age gender profileImage')
             .limit(limit * 1)
             .skip((page - 1) * limit)
-            .sort({ appointmentDate: 1, timeSlot: 1 });
+            .sort({ appointmentDate: 1, timeSlot: 1 })
+            .lean();
 
         const total = await Appointment.countDocuments(query);
 
@@ -477,7 +493,8 @@ const getAllDoctors = async (req, res) => {
         const doctors = await Doctor.find(query)
             .select('-password -__v')
             .limit(limit * 1)
-            .skip((page - 1) * limit);
+            .skip((page - 1) * limit)
+            .lean();
 
         const total = await Doctor.countDocuments(query);
 
@@ -506,15 +523,16 @@ const getDoctorById = async (req, res) => {
         const { id } = req.params;
         
         const doctor = await Doctor.findById(id)
-            .select('-password -__v');
-            
+            .select('-password -__v')
+            .lean();
+
         if (!doctor) {
             return res.status(404).json({
                 success: false,
                 error: 'Doctor not found'
             });
         }
-        
+
         res.json({
             success: true,
             doctor
@@ -541,7 +559,7 @@ const getAvailableSlots = async (req, res) => {
             });
         }
 
-        const doctor = await Doctor.findById(id);
+        const doctor = await Doctor.findById(id).select('availability').lean();
         if (!doctor) {
             return res.status(404).json({
                 error: 'Doctor not found'
@@ -550,7 +568,7 @@ const getAvailableSlots = async (req, res) => {
 
         // Get day of week
         const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' });
-        
+
         // Check if doctor works on this day
         if (!doctor.availability.days.includes(dayOfWeek)) {
             return res.json({
@@ -559,7 +577,7 @@ const getAvailableSlots = async (req, res) => {
             });
         }
 
-        // Get booked appointments for this date
+        // Get booked appointments for this date (only the timeSlot field is used)
         const bookedAppointments = await Appointment.find({
             doctorId: id,
             appointmentDate: {
@@ -567,7 +585,7 @@ const getAvailableSlots = async (req, res) => {
                 $lt: new Date(date).setHours(23, 59, 59, 999)
             },
             status: { $in: ['scheduled', 'confirmed', 'ongoing'] }
-        });
+        }).select('timeSlot').lean();
 
         const bookedSlots = bookedAppointments.map(apt => apt.timeSlot);
         const availableSlots = doctor.availability.timeSlots.filter(

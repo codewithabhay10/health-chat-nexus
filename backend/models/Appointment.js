@@ -116,6 +116,9 @@ const appointmentSchema = new mongoose.Schema({
 appointmentSchema.index({ doctorId: 1, appointmentDate: 1 });
 appointmentSchema.index({ patientId: 1, appointmentDate: 1 });
 appointmentSchema.index({ status: 1 });
+// Backs the hot slot-conflict / available-slots lookups that filter on
+// doctorId + appointmentDate + status together.
+appointmentSchema.index({ doctorId: 1, appointmentDate: 1, status: 1 });
 
 // Generate meeting link before saving
 appointmentSchema.pre('save', function(next) {

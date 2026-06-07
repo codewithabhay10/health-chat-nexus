@@ -5,7 +5,9 @@ const { validationResult } = require('express-validator');
 // Get doctor profile
 const getDoctorProfile = async (req, res) => {
     try {
-        const doctor = await Doctor.findById(req.user.id);
+        // .lean() returns a plain object (faster, less memory); since that
+        // skips the schema's toJSON password stripping, exclude it explicitly.
+        const doctor = await Doctor.findById(req.user.id).select('-password').lean();
         if (!doctor) {
             return res.status(404).json({
                 error: 'Doctor not found',
@@ -92,7 +94,8 @@ const getAllDoctors = async (req, res) => {
             .select('-password')
             .limit(limit * 1)
             .skip((page - 1) * limit)
-            .sort({ rating: -1, totalPatients: -1 });
+            .sort({ rating: -1, totalPatients: -1 })
+            .lean();
 
         const total = await Doctor.countDocuments(query);
 
@@ -130,7 +133,8 @@ const getDoctorAppointments = async (req, res) => {
             .populate('patientId', 'name email phone age gender')
             .limit(limit * 1)
             .skip((page - 1) * limit)
-            .sort({ appointmentDate: 1 });
+            .sort({ appointmentDate: 1 })
+            .lean();
 
         const total = await Appointment.countDocuments(query);
 
@@ -159,31 +163,41 @@ const getDoctorDashboard = async (req, res) => {
     try {
         const doctorId = req.user.id;
 
-        // Get doctor info
-        const doctor = await Doctor.findById(doctorId);
-        
-        // Get appointment statistics
-        const totalAppointments = await Appointment.countDocuments({ doctorId });
-        const todayAppointments = await Appointment.countDocuments({
-            doctorId,
-            appointmentDate: {
-                $gte: new Date().setHours(0, 0, 0, 0),
-                $lt: new Date().setHours(23, 59, 59, 999)
-            }
-        });
-        const upcomingAppointments = await Appointment.countDocuments({
-            doctorId,
-            status: 'scheduled',
-            appointmentDate: { $gte: new Date() }
-        });
+        const startOfDay = new Date().setHours(0, 0, 0, 0);
+        const endOfDay = new Date().setHours(23, 59, 59, 999);
 
-        // Get recent appointments
-        const recentAppointments = await Appointment.find({ doctorId })
-            .populate('patientId', 'name email phone')
-            .sort({ appointmentDate: -1 })
-            .limit(5);
-        
-        const uniquePatientCount = await Appointment.distinct('patientId', { doctorId }).length;
+        // These queries are independent, so run them in parallel instead of
+        // awaiting one after another.
+        const [
+            doctor,
+            totalAppointments,
+            todayAppointments,
+            upcomingAppointments,
+            recentAppointments,
+            uniquePatientIds
+        ] = await Promise.all([
+            Doctor.findById(doctorId).select('name specialization rating').lean(),
+            Appointment.countDocuments({ doctorId }),
+            Appointment.countDocuments({
+                doctorId,
+                appointmentDate: { $gte: startOfDay, $lt: endOfDay }
+            }),
+            Appointment.countDocuments({
+                doctorId,
+                status: 'scheduled',
+                appointmentDate: { $gte: new Date() }
+            }),
+            Appointment.find({ doctorId })
+                .populate('patientId', 'name email phone')
+                .sort({ appointmentDate: -1 })
+                .limit(5)
+                .lean(),
+            // distinct() resolves to an array; the previous `.length` was read
+            // off the Query (before await) and was always undefined.
+            Appointment.distinct('patientId', { doctorId })
+        ]);
+
+        const uniquePatientCount = uniquePatientIds.length;
 
         res.json({
             success: true,
@@ -225,7 +239,7 @@ const getAvailableSlots = async (req, res) => {
             });
         }
 
-        const doctor = await Doctor.findById(doctorId);
+        const doctor = await Doctor.findById(doctorId).select('availability').lean();
         if (!doctor) {
             return res.status(404).json({
                 error: 'Doctor not found'
@@ -234,7 +248,7 @@ const getAvailableSlots = async (req, res) => {
 
         // Get day of week
         const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' });
-        
+
         // Check if doctor is available on this day
         if (!doctor.availability.days.includes(dayOfWeek)) {
             return res.json({
@@ -243,7 +257,7 @@ const getAvailableSlots = async (req, res) => {
             });
         }
 
-        // Get booked appointments for this date
+        // Get booked appointments for this date (only the timeSlot field is used)
         const bookedAppointments = await Appointment.find({
             doctorId,
             appointmentDate: {
@@ -251,7 +265,7 @@ const getAvailableSlots = async (req, res) => {
                 $lt: new Date(date).setHours(23, 59, 59, 999)
             },
             status: { $in: ['scheduled', 'ongoing'] }
-        });
+        }).select('timeSlot').lean();
 
         const bookedSlots = bookedAppointments.map(apt => apt.timeSlot);
         const availableSlots = doctor.availability.timeSlots.filter(
